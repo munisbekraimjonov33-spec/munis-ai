@@ -28,6 +28,7 @@ async def main():
     
     # Create DB tables
     db.create_table_users()
+    db.create_table_messages()
     
     # Register Middleware
     dp.message.middleware(SubscriptionMiddleware())

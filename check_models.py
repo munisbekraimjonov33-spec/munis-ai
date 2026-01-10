@@ -1,16 +1,17 @@
 import google.generativeai as genai
-from loader import OPENAI_API_KEY
+from loader import OPENAI_API_KEYS
 import os
 
-# Configure using the key from loader
-genai.configure(api_key=OPENAI_API_KEY)
+print(f"Total API Keys found: {len(OPENAI_API_KEYS)}")
 
-print(f"API Key starts with: {OPENAI_API_KEY[:4]}...")
-
-print("Available models:")
-try:
-    for m in genai.list_models():
-        if 'generateContent' in m.supported_generation_methods:
-            print(m.name)
-except Exception as e:
-    print(f"Error listing models: {e}")
+for i, key in enumerate(OPENAI_API_KEYS):
+    print(f"\nTesting Key {i+1}: {key[:8]}...")
+    genai.configure(api_key=key)
+    try:
+        models = genai.list_models()
+        print("Available models:")
+        for m in models:
+            if 'generateContent' in m.supported_generation_methods:
+                print(f" - {m.name}")
+    except Exception as e:
+        print(f"Error for key {i+1}: {e}")

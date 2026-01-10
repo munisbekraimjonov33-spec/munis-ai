@@ -40,6 +40,18 @@ class Database:
         """
         self.execute(sql, commit=True)
 
+    def create_table_messages(self):
+        sql = """
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            role TEXT,
+            content TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+        self.execute(sql, commit=True)
+
     @staticmethod
     def format_args(sql, parameters: dict):
         sql += " AND ".join([
@@ -76,3 +88,15 @@ class Database:
     def get_all_users(self):
         sql = "SELECT id, full_name FROM users"
         return self.execute(sql, fetchall=True)
+
+    def add_message(self, user_id: int, role: str, content: str):
+        sql = "INSERT INTO messages(user_id, role, content) VALUES(?, ?, ?)"
+        self.execute(sql, parameters=(user_id, role, content), commit=True)
+
+    def get_history(self, user_id: int, limit: int = 10):
+        sql = "SELECT role, content FROM (SELECT * FROM messages WHERE user_id=? ORDER BY timestamp DESC LIMIT ?) ORDER BY timestamp ASC"
+        return self.execute(sql, parameters=(user_id, limit), fetchall=True)
+
+    def clear_history(self, user_id: int):
+        sql = "DELETE FROM messages WHERE user_id=?"
+        self.execute(sql, parameters=(user_id,), commit=True)

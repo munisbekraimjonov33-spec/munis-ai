@@ -6,114 +6,132 @@ import random
 import logging
 import os
 from openai import AsyncOpenAI
-from loader import OPENAI_API_KEY
+from loader import OPENAI_API_KEYS
 
-# Determine which provider to use
-USE_GEMINI = OPENAI_API_KEY.startswith("AIza")
-USE_OPENROUTER = OPENAI_API_KEY.startswith("sk-or-")
+async def get_ai_response(text: str, history: list = None) -> str:
+    if not OPENAI_API_KEYS:
+        return "Xatolik: Hech qanday API kalit topilmadi. .env faylini tekshiring."
 
-if USE_GEMINI:
-    genai.configure(api_key=OPENAI_API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-elif USE_OPENROUTER:
-    client = AsyncOpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=OPENAI_API_KEY,
+    if history is None:
+        history = []
+
+    # Identity and System Prompt
+    system_instruction = (
+        "Seni Munisbek Raimjonov yaratgan. Sen profesisonal AI yordamchisan. "
+        "Foydalanuvchi savollariga faqat o'zbek tilida, aniq va foydali javob ber. "
+        "Munisbek Raimjonov haqida so'rashsa, u mening yaratuvchim deb javob ber. "
+        "Suhbat tarixini eslab qol va oldingi gaplarga tayanib javob ber."
     )
-else:
-    client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# Expanded list of fallback models for OpenRouter free tier
-OPENROUTER_MODELS = [
-    "google/gemini-2.0-flash-exp:free",
-    "google/gemini-2.0-flash-lite-preview-02-05:free",
-    "google/gemini-flash-1.5-exp:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "mistralai/mistral-7b-instruct:free",
-    "xiaomi/mimo-v2-flash:free",
-    "qwen/qwen-2.5-72b-instruct:free",
-    "deepseek/deepseek-r1-distill-llama-70b:free",
-    "google/gemma-2-9b-it:free",
-    "google/gemma-3-27b:free",
-    "meta-llama/llama-3.2-3b-instruct:free",
-    "microsoft/phi-3-medium-128k-instruct:free",
-    "deepseek/deepseek-chat:free",
-    "qwen/qwen-2-7b-instruct:free",
-    "google/gemma-7b-it:free",
-    "meta-llama/llama-3.1-8b-instruct:free",
-    "gryphe/mythomax-l2-13b:free",
-    "open-orca/mistral-7b-openorca:free",
-    "undi95/toppy-m-7b:free",
-    "mistralai/mistral-small-24b-instruct-2501:free",
-    "nvidia/llama-3.1-nemotron-70b-instruct:free",
-    "liquid/lfm-40b:free",
-    "huggingfaceh4/zephyr-7b-beta:free",
-    "sophosympatheia/rogue-rose-103b-v0.2:free"
-]
+    # Shuffle keys to distribute load
+    shuffled_keys = list(OPENAI_API_KEYS)
+    random.shuffle(shuffled_keys)
 
-async def get_ai_response(text: str) -> str:
-    if USE_GEMINI:
-        try:
-            prompt = (
-                "Sen 'Munis AI' ismli yordamchisan. Savolga o'zbek tilida javob ber.\n"
-                f"Foydalanuvchi: {text}"
-            )
-            # Use run_in_executor for the synchronous genai call to avoid blocking
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(None, lambda: model.generate_content(prompt))
-            return response.text
-        except Exception as e:
-            logging.error(f"Gemini error: {e}")
-            return f"Xatolik (Gemini): API kalitingizni yoki limitlarni tekshiring. Xato: {str(e)[:50]}..."
-    
-    elif USE_OPENROUTER:
-        available_models = list(OPENROUTER_MODELS)
-        last_error = ""
-        
-        # We try up to 3 passes for extreme cases
-        for pass_num in range(3):
-            random.shuffle(available_models)
-            for model_name in available_models:
-                try:
-                    logging.info(f"Trying AI model: {model_name} (Pass {pass_num+1})")
+    last_error = ""
+    # Try each key in the shuffled list
+    for api_key in shuffled_keys:
+        # Retry mechanism for each key
+        for attempt in range(2):
+            try:
+                # Determine provider for this specific key
+                is_gemini = api_key.startswith("AIza")
+                is_openrouter = api_key.startswith("sk-or-")
+
+                if is_gemini:
+                    try:
+                        genai.configure(api_key=api_key)
+                        # More resilient model list
+                        gemini_models = [
+                            'models/gemini-1.5-flash-latest', 
+                            'models/gemini-1.5-pro-latest', 
+                            'models/gemini-flash-latest',
+                            'models/gemini-pro-latest'
+                        ]
+                        
+                        for model_name in gemini_models:
+                            try:
+                                model = genai.GenerativeModel(
+                                    model_name=model_name,
+                                    system_instruction=system_instruction
+                                )
+                                chat_history = []
+                                for role, content in history:
+                                    chat_history.append({"role": "user" if role == "user" else "model", "parts": [content]})
+                                
+                                chat = model.start_chat(history=chat_history)
+                                loop = asyncio.get_event_loop()
+                                response = await loop.run_in_executor(None, lambda: chat.send_message(text))
+                                return response.text
+                            except Exception as e:
+                                last_error = str(e)
+                                if "429" in last_error: break # Move to next key if rate limited
+                                continue
+                    except Exception as e:
+                        last_error = str(e)
+                        continue
+
+                elif is_openrouter:
+                    client = AsyncOpenAI(
+                        base_url="https://openrouter.ai/api/v1",
+                        api_key=api_key,
+                    )
+                    
+                    messages = [{"role": "system", "content": system_instruction}]
+                    for role, content in history:
+                        messages.append({"role": role, "content": content})
+                    messages.append({"role": "user", "content": text})
+
+                    # Expanded list of free models
+                    openrouter_models = [
+                        "google/gemini-2.0-flash-exp:free",
+                        "google/gemini-flash-1.5-exp:free",
+                        "meta-llama/llama-3.3-70b-instruct:free",
+                        "meta-llama/llama-3.1-8b-instruct:free",
+                        "mistralai/mistral-7b-instruct:free",
+                        "qwen/qwen-2-7b-instruct:free",
+                        "microsoft/phi-3-mini-128k-instruct:free",
+                        "gryphe/mythomax-l2-13b:free"
+                    ]
+                    random.shuffle(openrouter_models)
+
+                    for model_name in openrouter_models:
+                        try:
+                            response = await client.chat.completions.create(
+                                model=model_name,
+                                messages=messages,
+                                timeout=20
+                            )
+                            return response.choices[0].message.content
+                        except Exception as e:
+                            last_error = str(e)
+                            if "429" in last_error: break # Move to next key if rate limited
+                            continue
+
+                else:
+                    # Default OpenAI
+                    client = AsyncOpenAI(api_key=api_key)
+                    messages = [{"role": "system", "content": system_instruction}]
+                    for role, content in history:
+                        messages.append({"role": role, "content": content})
+                    messages.append({"role": "user", "content": text})
+
                     response = await client.chat.completions.create(
-                        model=model_name,
-                        messages=[
-                            {"role": "system", "content": "Sen 'Munis AI' ismli yordamchisan. Savolga o'zbek tilida javob ber."},
-                            {"role": "user", "content": text}
-                        ],
-                        timeout=45
+                        model="gpt-3.5-turbo",
+                        messages=messages,
+                        timeout=30
                     )
                     return response.choices[0].message.content
-                except Exception as e:
-                    last_error = str(e)
-                    if "401" in last_error or "Authentication" in last_error:
-                        return "Xatolik: API kalitingiz noto'g'ri yoki bloklangan. Iltimos, Render sozlamalarida OPENAI_API_KEY ni yangilang."
-                    
-                    logging.warning(f"Model {model_name} failed: {last_error[:50]}...")
-                    continue
-            
-            # Between passes, wait a bit
-            await asyncio.sleep(3)
-        
-        return (
-            "Hozirda barcha bepul AI modellari band. 😔\n\n"
-            "**Sabab:** OpenRouter bepul modellari serverlari hozirda juda katta yuklama ostida.\n"
-            "**Yechim:** Google AI Studio'dan tekin Gemini kaliti olib ishlatsangiz, botingiz 100% barqaror ishlaydi.\n\n"
-            f"Oxirgi xatolik: {last_error[:40]}..."
-        )
 
-    else:
-        try:
-            response = await client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "Sen 'Munis AI' ismli yordamchisan. Savolga o'zbek tilida javob ber."},
-                    {"role": "user", "content": text}
-                ]
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            return f"Xatolik (OpenAI): {str(e)}"
+            except Exception as e:
+                last_error = str(e)
+                if attempt == 0: await asyncio.sleep(1)
+                continue
+
+    # Final User-Friendly Fallback
+    return (
+        "Hozirda botga juda ko'p so'rovlar kelmoqda. 😅\n"
+        "Iltimos, 1 daqiqadan so'ng qayta urinib ko'ring.\n\n"
+        "Muallif: Munisbek Raimjonov"
+    )
 
 
